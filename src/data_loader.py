@@ -12,7 +12,7 @@ from src.config import (
 
 @st.cache_data(ttl=3600)
 def load_dataset():
-    """Load hydro-meteorological 25-year dataset with resilient Parquet & CSV auto-detection."""
+    """Load hydro-meteorological 25-year dataset with resilient Parquet & CSV auto-detection and float64 spatial casting."""
     loaded_path = None
     df = pd.DataFrame()
 
@@ -38,7 +38,33 @@ def load_dataset():
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"])
 
+    # Enforce strict float64 numeric casting for spatial coordinates without rounding truncation
+    if "latitude" in df.columns:
+        df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce").astype("float64")
+    if "longitude" in df.columns:
+        df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce").astype("float64")
+
     return df
+
+def audit_geospatial_bounds(df: pd.DataFrame):
+    """
+    Diagnostic sanity-check utility function to print coordinate min/max ranges per country/basin to terminal logs.
+    """
+    if df.empty:
+        print("[GEOSPATIAL AUDIT] DataFrame is empty.")
+        return
+
+    print("=== GEOSPATIAL COORDINATE BOUNDS AUDIT ===")
+    if "country" in df.columns and "latitude" in df.columns and "longitude" in df.columns:
+        country_bounds = df.groupby("country")[["latitude", "longitude"]].agg(["min", "max", "count"])
+        print("\n--- Coordinates by Country ---")
+        print(country_bounds)
+
+    if "basin" in df.columns and "latitude" in df.columns and "longitude" in df.columns:
+        basin_bounds = df.groupby("basin")[["latitude", "longitude"]].agg(["min", "max", "count"])
+        print("\n--- Coordinates by Basin ---")
+        print(basin_bounds)
+    print("==========================================")
 
 @st.cache_resource
 def load_model():
