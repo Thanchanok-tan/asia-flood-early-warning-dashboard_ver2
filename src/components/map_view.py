@@ -8,24 +8,42 @@ from src.i18n import get_text
 from src.data_loader import calculate_map_bounds
 
 def render_map_view(df: pd.DataFrame, lang: str):
-    """Render interactive Plotly geospatial early warning map with Plotly 5/6 dual compatibility."""
+    """Render interactive Plotly geospatial early warning map with Plotly 5/6 dual compatibility and verified coordinate mapping."""
     st.subheader(get_text(lang, "map_title"))
 
     if df.empty:
         st.info("No monitoring station data available for current selection.")
         return
 
-    # Focus map on the latest status per station
-    latest_df = df.sort_values("date").groupby("station_id", as_index=False).last()
+    # Ensure date is datetime64[ns] and sort chronologically before station slicing
+    df_sorted = df.copy()
+    if "date" in df_sorted.columns:
+        df_sorted["date"] = pd.to_datetime(df_sorted["date"])
+        df_sorted = df_sorted.sort_values("date")
+
+    # Focus map on the latest status per station while preserving static geospatial metadata
+    latest_df = df_sorted.groupby("station_id", as_index=False).last()
+
+    # Enforce strict float64 numeric casting for latitude & longitude to prevent string/inversion bugs
+    latest_df["latitude"] = pd.to_numeric(latest_df["latitude"], errors="coerce").astype("float64")
+    latest_df["longitude"] = pd.to_numeric(latest_df["longitude"], errors="coerce").astype("float64")
+
+    # Filter out any rows with invalid coordinates
+    latest_df = latest_df.dropna(subset=["latitude", "longitude"])
+
+    if latest_df.empty:
+        st.warning("No valid station coordinates found in current selection.")
+        return
 
     # Create marker size metric proportional to river level & risk score
     latest_df["marker_size"] = (latest_df["river_level_m"] * 2.2 + latest_df["flood_risk_score"] * 16).clip(lower=8, upper=30)
 
-    # Hover text styling with high-contrast HTML formatting
+    # Hover text styling with explicit latitude/longitude coordinate validation display
     latest_df["hover_info"] = (
         "<b style='font-size:14px; color:#0F172A;'>" + latest_df["station_name"] + "</b><br>" +
         "<span style='color:#334155;'>" + get_text(lang, "hover_basin") + ": <b>" + latest_df["basin"] + "</b></span><br>" +
         "<span style='color:#334155;'>" + get_text(lang, "hover_country") + ": <b>" + latest_df["country"] + "</b></span><br>" +
+        "<span style='color:#475569; font-size:11px;'>Coordinates: <b>" + latest_df["latitude"].round(4).astype(str) + "°N, " + latest_df["longitude"].round(4).astype(str) + "°E</b></span><br>" +
         "<hr style='margin:4px 0; border-color:#CBD5E1;'/>" +
         "<span style='color:#0F172A;'>" + get_text(lang, "hover_risk") + ": <b style='color:#1E3A8A;'>" + (latest_df["flood_risk_score"] * 100).round(1).astype(str) + "%</b></span><br>" +
         "<span style='color:#334155;'>" + get_text(lang, "hover_severity") + ": <b>" + latest_df.get("severity_level", latest_df.get("alert_level", "Normal")).astype(str) + "</b></span><br>" +
@@ -38,7 +56,7 @@ def render_map_view(df: pd.DataFrame, lang: str):
     # Dynamic auto-centering & bounding box zoom calculation
     center_lat, center_lon, map_zoom = calculate_map_bounds(latest_df)
 
-    # Plotly 5.x / 6.x Dual Compatibility Map rendering
+    # Plotly 5.x / 6.x Dual Compatibility Map rendering (Explicit lat=latitude, lon=longitude)
     if hasattr(px, "scatter_map"):
         fig = px.scatter_map(
             latest_df,
@@ -114,10 +132,10 @@ def render_map_view(df: pd.DataFrame, lang: str):
     )
 
     if selected_station:
-        station_ts = df[df["station_name"] == selected_station].sort_values("date")
+        station_ts = df_sorted[df_sorted["station_name"] == selected_station].sort_values("date")
         latest_row = station_ts.iloc[-1]
 
-        # Station Metadata & Metrics
+        # Station Metadata & Verified Coordinates
         st_name = latest_row["station_name"]
         st_id = latest_row["station_id"]
         basin_name = latest_row["basin"]
@@ -170,7 +188,7 @@ def render_map_view(df: pd.DataFrame, lang: str):
                     <div class="station-inspector-header">
                         <div>
                             <div class="station-title">{st_name} ({st_id})</div>
-                            <div class="station-subtitle">{basin_name} | {country_name} | Coordinates: {lat_val:.4f}°N, {lon_val:.4f}°E</div>
+                            <div class="station-subtitle">{basin_name} | {country_name} | Verified Coordinates: {lat_val:.4f}°N, {lon_val:.4f}°E</div>
                         </div>
                         <span class="badge" style="background-color: {badge_bg}; color: {badge_txt}; font-size: 0.85rem; padding: 6px 12px;">
                             {severity}
